@@ -23,12 +23,14 @@ class BaseTest(unittest.TestCase):
         cs = base._get_hyperparameter_search_space(cs, dataset_properties,
                                                    exclude, include, pipeline)
 
-        self.assertEqual(len(cs.get_hyperparameter("p0:__choice__").choices), 14)
-        self.assertEqual(len(cs.get_hyperparameter("p1:__choice__").choices), 16)
+        self.assertEqual(len(cs.get_hyperparameter("p0:__choice__").choices),
+                         13)
+        self.assertEqual(len(cs.get_hyperparameter("p1:__choice__").choices),
+                         15)
 
         #for clause in sorted([str(clause) for clause in cs.forbidden_clauses]):
         #    print clause
-        self.assertEqual(151, len(cs.forbidden_clauses))
+        self.assertEqual(134, len(cs.forbidden_clauses))
 
         cs = HPOlibConfigSpace.configuration_space.ConfigurationSpace()
         dataset_properties = {'target_type': 'classification', 'signed': True}
@@ -36,14 +38,14 @@ class BaseTest(unittest.TestCase):
         cs = base._get_hyperparameter_search_space(cs, dataset_properties,
                                                    exclude, include, pipeline)
         self.assertEqual(len(cs.get_hyperparameter("p0:__choice__").choices),
-                         14)
+                         13)
         self.assertEqual(len(cs.get_hyperparameter("p1:__choice__").choices),
                          10)
         self.assertEqual(len(cs.get_hyperparameter("c:__choice__").choices),
                          1)
         # Mostly combinations of p0 making the data unsigned and p1 not
         # changing the values of the data points
-        self.assertEqual(74, len(cs.forbidden_clauses))
+        self.assertEqual(65, len(cs.forbidden_clauses))
 
 
         cs = HPOlibConfigSpace.configuration_space.ConfigurationSpace()
@@ -52,12 +54,12 @@ class BaseTest(unittest.TestCase):
         cs = base._get_hyperparameter_search_space(cs, dataset_properties,
                                                    exclude, include, pipeline)
         self.assertEqual(len(cs.get_hyperparameter("p0:__choice__").choices),
-                         14)
+                         13)
         self.assertEqual(len(cs.get_hyperparameter("p1:__choice__").choices),
-                         16)
+                         15)
         self.assertEqual(len(cs.get_hyperparameter("c:__choice__").choices),
-                         16)
-        self.assertEqual(126, len(cs.forbidden_clauses))
+                         15)
+        self.assertEqual(107, len(cs.forbidden_clauses))
 
 
         cs = HPOlibConfigSpace.configuration_space.ConfigurationSpace()
@@ -67,8 +69,8 @@ class BaseTest(unittest.TestCase):
         self.assertEqual(len(cs.get_hyperparameter("p0:__choice__").choices),
                          11)
         self.assertEqual(len(cs.get_hyperparameter("p1:__choice__").choices),
-                         16)
-        self.assertEqual(409, len(cs.forbidden_clauses))
+                         15)
+        self.assertEqual(343, len(cs.forbidden_clauses))
         #for clause in sorted([str(clause) for clause in cs.forbidden_clauses]):
         #    print(clause)
 
@@ -84,9 +86,9 @@ class BaseTest(unittest.TestCase):
         self.assertEqual(len(cs.get_hyperparameter("p0:__choice__").choices),
                          11)
         self.assertEqual(len(cs.get_hyperparameter("p1:__choice__").choices),
-                         16)
+                         15)
         # Data is guaranteed to be positive in cases like densifier,
         # extra_trees_preproc, multinomial_nb -> less constraints
-        self.assertEqual(364, len(cs.forbidden_clauses))
+        self.assertEqual(298, len(cs.forbidden_clauses))
 
 
