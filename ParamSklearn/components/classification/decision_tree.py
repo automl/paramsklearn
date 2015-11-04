@@ -5,43 +5,51 @@ from HPOlibConfigSpace.hyperparameters import UniformFloatHyperparameter, \
     UniformIntegerHyperparameter, CategoricalHyperparameter, \
     UnParametrizedHyperparameter, Constant
 
-from ParamSklearn.components.classification_base import \
+from ParamSklearn.components.base import \
     ParamSklearnClassificationAlgorithm
-from ParamSklearn.util import DENSE, PREDICTIONS
+from ParamSklearn.constants import *
 # get our own forests to replace the sklearn ones
 from sklearn.tree import DecisionTreeClassifier
 
 
 class DecisionTree(ParamSklearnClassificationAlgorithm):
-    def __init__(self, criterion, max_features, max_depth,
-                 min_samples_split, min_samples_leaf,
-                 max_leaf_nodes, random_state=None):
+    def __init__(self, criterion, splitter, max_features, max_depth,
+                 min_samples_split, min_samples_leaf, min_weight_fraction_leaf,
+                 max_leaf_nodes, class_weight=None, random_state=None):
         self.criterion = criterion
-        self.max_features = float(max_features)
-
-        if max_depth == "None":
-            self.max_depth = None
-        else:
-            self.max_depth = int(self.max_depth)
-
-        self.min_samples_split = int(min_samples_split)
-        self.min_samples_leaf = int(min_samples_leaf)
-
-        if max_leaf_nodes == "None":
-            self.max_leaf_nodes = None
-        else:
-            self.max_leaf_nodes = int(max_leaf_nodes)
-
+        self.splitter = splitter
+        self.max_features = max_features
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+        self.min_samples_leaf = min_samples_leaf
+        self.max_leaf_nodes = max_leaf_nodes
+        self.min_weight_fraction_leaf = min_weight_fraction_leaf
         self.random_state = random_state
+        self.class_weight = class_weight
         self.estimator = None
 
     def fit(self, X, y, sample_weight=None):
+        self.max_features = float(self.max_features)
+        if self.max_depth == "None":
+            self.max_depth = None
+        else:
+            num_features = X.shape[1]
+            max_depth = max(1, int(np.round(self.max_depth * num_features, 0)))
+        self.min_samples_split = int(self.min_samples_split)
+        self.min_samples_leaf = int(self.min_samples_leaf)
+        if self.max_leaf_nodes == "None":
+            self.max_leaf_nodes = None
+        else:
+            self.max_leaf_nodes = int(self.max_leaf_nodes)
+        self.min_weight_fraction_leaf = float(self.min_weight_fraction_leaf)
+
         self.estimator = DecisionTreeClassifier(
             criterion=self.criterion,
-            max_depth=self.max_depth,
+            max_depth=max_depth,
             min_samples_split=self.min_samples_split,
             min_samples_leaf=self.min_samples_leaf,
             max_leaf_nodes=self.max_leaf_nodes,
+            class_weight=self.class_weight,
             random_state=self.random_state)
         self.estimator.fit(X, y, sample_weight=sample_weight)
         return self
@@ -57,7 +65,7 @@ class DecisionTree(ParamSklearnClassificationAlgorithm):
         return self.estimator.predict_proba(X)
 
     @staticmethod
-    def get_properties():
+    def get_properties(dataset_properties=None):
         return {'shortname': 'DT',
                 'name': 'Decision Tree Classifier',
                 'handles_missing_values': False,
@@ -71,29 +79,30 @@ class DecisionTree(ParamSklearnClassificationAlgorithm):
                 'handles_multiclass': True,
                 'handles_multilabel': True,
                 'is_deterministic': True,
-                'handles_sparse': False,
-                'input': (DENSE, ),
-                'output': PREDICTIONS,
+                'handles_sparse': True,
+                'input': (DENSE, SPARSE, UNSIGNED_DATA),
+                'output': (PREDICTIONS,),
                 # TODO find out what is best used here!
                 # But rather fortran or C-contiguous?
                 'preferred_dtype': np.float32}
 
     @staticmethod
     def get_hyperparameter_search_space(dataset_properties=None):
-        criterion = CategoricalHyperparameter(
-            "criterion", ["gini", "entropy"], default="gini")
-        max_features = Constant('max_features', 1.0)
-        max_depth = UnParametrizedHyperparameter("max_depth", "None")
-        min_samples_split = UniformIntegerHyperparameter(
-            "min_samples_split", 2, 20, default=2)
-        min_samples_leaf = UniformIntegerHyperparameter(
-            "min_samples_leaf", 1, 20, default=1)
-        max_leaf_nodes = UnParametrizedHyperparameter("max_leaf_nodes", "None")
         cs = ConfigurationSpace()
-        cs.add_hyperparameter(criterion)
-        cs.add_hyperparameter(max_features)
-        cs.add_hyperparameter(max_depth)
-        cs.add_hyperparameter(min_samples_split)
-        cs.add_hyperparameter(min_samples_leaf)
-        cs.add_hyperparameter(max_leaf_nodes)
+
+        criterion = cs.add_hyperparameter(CategoricalHyperparameter(
+            "criterion", ["gini", "entropy"], default="gini"))
+        splitter = cs.add_hyperparameter(Constant("splitter", "best"))
+        max_features = cs.add_hyperparameter(Constant('max_features', 1.0))
+        max_depth = cs.add_hyperparameter(UniformFloatHyperparameter(
+            'max_depth', 0., 2., default=0.5))
+        min_samples_split = cs.add_hyperparameter(UniformIntegerHyperparameter(
+            "min_samples_split", 2, 20, default=2))
+        min_samples_leaf = cs.add_hyperparameter(UniformIntegerHyperparameter(
+            "min_samples_leaf", 1, 20, default=1))
+        min_weight_fraction_leaf = cs.add_hyperparameter(
+            Constant("min_weight_fraction_leaf", 0.0))
+        max_leaf_nodes = cs.add_hyperparameter(
+            UnParametrizedHyperparameter("max_leaf_nodes", "None"))
+
         return cs

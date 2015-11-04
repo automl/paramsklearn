@@ -1,18 +1,20 @@
 from collections import OrderedDict
+import copy
 from itertools import product
 
 import sklearn
-if sklearn.__version__ != "0.15.2":
-    raise ValueError("ParamSklearn supports only sklearn version 0.15.2, "
+if sklearn.__version__ != "0.16.1":
+    raise ValueError("ParamSklearn supports only sklearn version 0.16.1, "
                      "you installed %s." % sklearn.__version__)
 from sklearn.base import RegressorMixin
 import numpy as np
 
 from HPOlibConfigSpace.forbidden import ForbiddenEqualsClause, ForbiddenAndConjunction
+from HPOlibConfigSpace.configuration_space import ConfigurationSpace
 
 from ParamSklearn import components as components
 from ParamSklearn.base import ParamSklearnBaseEstimator
-from ParamSklearn.util import SPARSE
+from ParamSklearn.constants import SPARSE
 import ParamSklearn.create_searchspace_util
 
 
@@ -62,28 +64,11 @@ class ParamSklearnRegressor(RegressorMixin, ParamSklearnBaseEstimator):
 
     """
 
-    def fit(self, X, Y, fit_params=None, init_params=None):
-        super(ParamSklearnRegressor, self).fit(X, Y, fit_params=fit_params,
-                                               init_params=init_params)
+    def pre_transform(self, X, Y, fit_params=None, init_params=None):
+        X, fit_params = super(ParamSklearnRegressor, self).pre_transform(
+            X, Y, fit_params=fit_params, init_params=init_params)
         self.num_targets = 1 if len(Y.shape) == 1 else Y.shape[1]
-        return self
-
-
-    def _validate_input_X(self, X):
-        # TODO: think of all possible states which can occur and how to
-        # handle them
-        pass
-
-    def _validate_input_Y(self, Y):
-        pass
-
-    def add_model_class(self, model):
-        """
-        Raises
-        ------
-            NotImplementedError
-        """
-        raise NotImplementedError()
+        return X, fit_params
 
     @classmethod
     def get_available_components(cls, available_comp, data_prop, inc, exc):
@@ -100,12 +85,8 @@ class ParamSklearnRegressor(RegressorMixin, ParamSklearnBaseEstimator):
             components_dict[name] = entry
         return components_dict
 
-
     @classmethod
-    def get_hyperparameter_search_space(cls, include_estimators=None,
-                                        exclude_estimators=None,
-                                        include_preprocessors=None,
-                                        exclude_preprocessors=None,
+    def get_hyperparameter_search_space(cls, include=None, exclude=None,
                                         dataset_properties=None):
         """Return the configuration space for the CASH problem.
 
@@ -142,192 +123,122 @@ class ParamSklearnRegressor(RegressorMixin, ParamSklearnBaseEstimator):
         cs : HPOlibConfigSpace.configuration_space.Configuration
             The configuration space describing the ParamSklearnClassifier.
         """
-        if include_estimators is not None and exclude_estimators is not None:
-            raise ValueError("The arguments include_estimators and "
-                             "exclude_regressors cannot be used together.")
-
-        if include_preprocessors is not None and exclude_preprocessors is not None:
-            raise ValueError("The arguments include_preprocessors and "
-                             "exclude_preprocessors cannot be used together.")
+        cs = ConfigurationSpace()
 
         if dataset_properties is None or not isinstance(dataset_properties, dict):
             dataset_properties = dict()
+        if not 'target_type' in dataset_properties:
+            dataset_properties['target_type'] = 'regression'
+        if dataset_properties['target_type'] != 'regression':
+            dataset_properties['target_type'] = 'regression'
 
         if 'sparse' not in dataset_properties:
             # This dataset is probaby dense
             dataset_properties['sparse'] = False
 
-        available_preprocessors = components.preprocessing_components._preprocessors
-        preprocessors = ParamSklearnRegressor.get_available_components(
-            available_comp=available_preprocessors,
-            data_prop=dataset_properties, inc=include_preprocessors,
-            exc=exclude_preprocessors)
+        pipeline = cls._get_pipeline()
+        cs = cls._get_hyperparameter_search_space(cs, dataset_properties,
+                                                  exclude, include, pipeline)
 
-        # Compile a list of all estimator objects for this problem
-        available_regressors = ParamSklearnRegressor._get_estimator_components()
-        regressors = ParamSklearnRegressor.get_available_components(
-            available_comp=available_regressors, data_prop=dataset_properties,
-            inc=include_estimators, exc=exclude_estimators)
+        regressors = cs.get_hyperparameter('regressor:__choice__').choices
+        preprocessors = cs.get_hyperparameter('preprocessor:__choice__').choices
+        available_regressors = pipeline[-1][1].get_available_components(
+            dataset_properties)
+        available_preprocessors = pipeline[-2][1].get_available_components(
+            dataset_properties)
 
-        if len(regressors) == 0:
-            raise ValueError("No regressors found")
-        if len(preprocessors) == 0:
-            raise ValueError("No preprocessors found, please add NoPreprocessing")
-
-        preprocessors_list = preprocessors.keys()
-        regressors_list = regressors.keys()
-        matches = ParamSklearn.create_searchspace_util.get_match_array(
-            preprocessors=preprocessors, estimators=regressors,
-            sparse=dataset_properties.get('sparse'), pipeline=cls._get_pipeline())
-
-        # Now we have only legal preprocessors/classifiers we combine them
-        # Simple sanity checks
-        assert np.sum(matches) != 0, "No valid preprocessor/regressor " \
-                                     "combination found, probably a bug"
-        assert np.sum(matches) <= (matches.shape[0] * matches.shape[1]), \
-            "'matches' is not binary; %s <= %d, [%d*%d]" % \
-            (str(np.sum(matches)), matches.shape[0]*matches.shape[1],
-             matches.shape[0], matches.shape[1])
-
-        if np.sum(matches) < (matches.shape[0] * matches.shape[1]):
-            matches, preprocessors_list, regressors_list, preprocessors, regressors = \
-                ParamSklearn.create_searchspace_util.sanitize_arrays(
-                    m=matches, preprocessors_list=preprocessors_list,
-                    estimators_list=regressors_list,
-                    preprocessors=preprocessors, estimators=regressors)
-
-        # Sanity checks
-        assert len(preprocessors_list) > 0, "No valid preprocessors found"
-        assert len(regressors_list) > 0, "No valid classifiers found"
-
-        assert len(preprocessors_list) == matches.shape[0], \
-            "Preprocessor deleting went wrong"
-        assert len(regressors_list) == matches.shape[1], \
-            "Classifier deleting went wrong"
-        assert [r in regressors_list for r in regressors]
-        assert [p in preprocessors_list for p in preprocessors]
-
-        # Select the default preprocessor before the always active
-        # preprocessors are added, so they will not be selected as default
-        # preprocessors
-        if "no_preprocessing" in preprocessors:
-            preprocessor_default = "no_preprocessing"
-        else:
-            preprocessor_default = sorted(preprocessors.keys())[0]
-
-        # Now add always present preprocessors
-        for name in available_preprocessors:
-            if name in cls._get_pipeline():
-                preprocessors[name] = available_preprocessors[name]
-
-        # Hardcode the defaults based on some educated guesses
-        regressor_defaults = ['random_forest', 'liblinear', 'sgd',
-                               'libsvm_svc']
-        regressor_default = None
-        for rd_ in regressor_defaults:
-            if rd_ not in regressors:
-                continue
-            no_preprocessing_idx = preprocessors_list.index(preprocessor_default)
-            rd_index = regressors_list.index(rd_)
-            if matches[no_preprocessing_idx, rd_index] == 1:
-                regressor_default = rd_
-                break
-        if regressor_default is None:
-            regressor_default = regressors.keys()[0]
-
-        # Get the configuration space
-        configuration_space = super(ParamSklearnRegressor, cls).\
-            get_hyperparameter_search_space(estimator_name=cls._get_estimator_hyperparameter_name(),
-                                            default_estimator=regressor_default,
-                                            estimator_components=regressors,
-                                            default_preprocessor=preprocessor_default,
-                                            preprocessor_components=preprocessors,
-                                            dataset_properties=dataset_properties,
-                                            always_active=cls._get_pipeline())
-
-        # And now add forbidden parameter configurations
-        # According to matches
-        configuration_space = ParamSklearn.create_searchspace_util.add_forbidden(
-            conf_space=configuration_space, preproc_list=preprocessors_list,
-            est_list=regressors_list, matches=matches, est_type="regressor")
+        possible_default_regressor = copy.copy(list(
+            available_regressors.keys()))
+        default = cs.get_hyperparameter('regressor:__choice__').default
+        del possible_default_regressor[
+            possible_default_regressor.index(default)]
 
         # A regressor which can handle sparse data after the densifier
         for key in regressors:
-            if SPARSE in regressors[key].get_properties()['input']:
-                try:
-                    configuration_space.add_forbidden_clause(
-                        ForbiddenAndConjunction(
-                            ForbiddenEqualsClause(
-                                configuration_space.get_hyperparameter(
-                                    'regressor'), key),
-                            ForbiddenEqualsClause(
-                                configuration_space.get_hyperparameter(
-                                    'preprocessor'), 'densifier')
-                        ))
-                except ValueError as e:
-                    if e.message.startswith("Forbidden clause must be "
-                                            "instantiated with a legal "
-                                            "hyperparameter value for "
-                                            "'preprocessor"):
-                        pass
-                    else:
-                        raise e
+            if SPARSE in available_regressors[key].get_properties(dataset_properties=None)['input']:
+                if 'densifier' in preprocessors:
+                    while True:
+                        try:
+                            cs.add_forbidden_clause(
+                                ForbiddenAndConjunction(
+                                    ForbiddenEqualsClause(
+                                        cs.get_hyperparameter(
+                                            'regressor:__choice__'), key),
+                                    ForbiddenEqualsClause(
+                                        cs.get_hyperparameter(
+                                            'preprocessor:__choice__'), 'densifier')
+                                ))
+                            break
+                        except ValueError:
+                            # Change the default and try again
+                            try:
+                                default = possible_default_regressor.pop()
+                            except IndexError:
+                                raise ValueError(
+                                    "Cannot find a legal default configuration.")
+                            cs.get_hyperparameter(
+                                'regressor:__choice__').default = default
 
         # which would take too long
         # Combinations of tree-based models with feature learning:
-        regressors_ = ["random_forest", "gradient_boosting", "gaussian_process"]
-        feature_learning_ = ["kitchen_sinks", "sparse_filtering"]
+        regressors_ = ["adaboost", "decision_tree", "extra_trees",
+                       "gaussian_process", "gradient_boosting",
+                       "k_nearest_neighbors", "random_forest"]
+        feature_learning_ = ["kitchen_sinks", "kernel_pca", "nystroem_sampler"]
 
         for r, f in product(regressors_, feature_learning_):
-            if r not in regressors_list:
+            if r not in regressors:
                 continue
-            if f not in preprocessors_list:
+            if f not in preprocessors:
                 continue
-            try:
-                configuration_space.add_forbidden_clause(ForbiddenAndConjunction(
-                    ForbiddenEqualsClause(configuration_space.get_hyperparameter(
-                        "regressor"), r),
-                    ForbiddenEqualsClause(configuration_space.get_hyperparameter(
-                        "preprocessor"), f)))
-            except KeyError:
-                pass
+            while True:
+                try:
+                    cs.add_forbidden_clause(ForbiddenAndConjunction(
+                        ForbiddenEqualsClause(cs.get_hyperparameter(
+                            "regressor:__choice__"), r),
+                        ForbiddenEqualsClause(cs.get_hyperparameter(
+                            "preprocessor:__choice__"), f)))
+                    break
+                except KeyError:
+                    break
+                except ValueError:
+                    # Change the default and try again
+                    try:
+                        default = possible_default_regressor.pop()
+                    except IndexError:
+                        raise ValueError(
+                            "Cannot find a legal default configuration.")
+                    cs.get_hyperparameter(
+                        'regressor:__choice__').default = default
 
-        # We have seen empirically that tree-based models together with PCA
-        # don't work better than tree-based models without preprocessing
-        regressors_ = ["random_forest", "gradient_boosting"]
-        for r in regressors_:
-            if r not in regressors_list:
-                continue
-            try:
-                configuration_space.add_forbidden_clause(
-                    ForbiddenAndConjunction(
-                        ForbiddenEqualsClause(
-                            configuration_space.get_hyperparameter(
-                                "preprocessor"), "pca"),
-                        ForbiddenEqualsClause(
-                            configuration_space.get_hyperparameter(
-                                "classifier"), r)))
-            except KeyError:
-                pass
-            except ValueError as e:
-                if e.message.startswith("Forbidden clause must be "
-                                        "instantiated with a legal "
-                                        "hyperparameter value for "
-                                        "'preprocessor"):
-                    pass
-                else:
-                    raise e
-
-        return configuration_space
+        return cs
 
     @staticmethod
     def _get_estimator_components():
         return components.regression_components._regressors
 
-    @staticmethod
-    def _get_estimator_hyperparameter_name():
-        return "regressor"
+    @classmethod
+    def _get_pipeline(cls):
+        steps = []
 
-    @staticmethod
-    def _get_pipeline():
-        return ["imputation", "rescaling", "__preprocessor__", "__estimator__"]
+        # Add the always active preprocessing components
+        steps.extend(
+            [["one_hot_encoding",
+              components.data_preprocessing._preprocessors['one_hot_encoding']],
+            ["imputation",
+              components.data_preprocessing._preprocessors['imputation']],
+             ["rescaling",
+              components.data_preprocessing._preprocessors['rescaling']]])
+
+        # Add the preprocessing component
+        steps.append(['preprocessor',
+                      components.feature_preprocessing._preprocessors[
+                          'preprocessor']])
+
+        # Add the classification component
+        steps.append(['regressor',
+                      components.regression_components._regressors['regressor']])
+        return steps
+
+    def _get_estimator_hyperparameter_name(self):
+        return "regressor"

@@ -5,8 +5,8 @@ from HPOlibConfigSpace.configuration_space import ConfigurationSpace
 from HPOlibConfigSpace.hyperparameters import UniformFloatHyperparameter, \
     CategoricalHyperparameter
 
-from ParamSklearn.components.classification_base import ParamSklearnClassificationAlgorithm
-from ParamSklearn.util import DENSE, SPARSE, PREDICTIONS
+from ParamSklearn.components.base import ParamSklearnClassificationAlgorithm
+from ParamSklearn.constants import *
 
 
 class BernoulliNB(ParamSklearnClassificationAlgorithm):
@@ -24,9 +24,42 @@ class BernoulliNB(ParamSklearnClassificationAlgorithm):
         self.estimator = None
 
     def fit(self, X, y):
-        self.estimator = sklearn.naive_bayes.MultinomialNB( alpha = self.alpha, fit_prior = self.fit_prior)
-        self.estimator.fit(X, y)
+        while not self.configuration_fully_fitted():
+            self.iterative_fit(X, y, n_iter=1)
         return self
+
+    def iterative_fit(self, X, y, n_iter=1, refit=False):
+        if refit:
+            self.estimator = None
+
+        if self.estimator is None:
+            self.n_iter = 0
+            self.fully_fit_ = False
+            self.estimator = sklearn.naive_bayes.BernoulliNB(
+                alpha=self.alpha, fit_prior=self.fit_prior)
+            self.classes_ = np.unique(y.astype(int))
+
+        for iter in range(n_iter):
+            start = min(self.n_iter * 1000, y.shape[0])
+            stop = min((self.n_iter + 1) * 1000, y.shape[0])
+            # Upper limit, scipy.sparse doesn't seem to handle max > len(matrix)
+            stop = min(stop, y.shape[0])
+            self.estimator.partial_fit(X[start:stop], y[start:stop], self.classes_)
+            self.n_iter += 1
+
+            if stop >= len(y):
+                self.fully_fit_ = True
+                break
+
+        return self
+
+    def configuration_fully_fitted(self):
+        if self.estimator is None:
+            return False
+        elif not hasattr(self, 'fully_fit_'):
+            return False
+        else:
+            return self.fully_fit_
 
     def predict(self, X):
         if self.estimator is None:
@@ -39,9 +72,9 @@ class BernoulliNB(ParamSklearnClassificationAlgorithm):
         return self.estimator.predict_proba(X)
 
     @staticmethod
-    def get_properties():
-        return {'shortname': 'MultinomialNB',
-                'name': 'Multinomial Naive Bayes classifier',
+    def get_properties(dataset_properties=None):
+        return {'shortname': 'BernoulliNB',
+                'name': 'Bernoulli Naive Bayes classifier',
                 'handles_missing_values': False,
                 'handles_nominal_values': False,
                 # sklearn website says: ... BernoulliNB is designed for
@@ -55,8 +88,8 @@ class BernoulliNB(ParamSklearnClassificationAlgorithm):
                 'handles_multilabel': False,
                 'is_deterministic': True,
                 'handles_sparse': False,
-                'input': (DENSE, SPARSE),
-                'output': PREDICTIONS,
+                'input': (DENSE, SPARSE, UNSIGNED_DATA),
+                'output': (PREDICTIONS,),
                 'preferred_dtype': np.bool}
 
     @staticmethod

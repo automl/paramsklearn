@@ -1,17 +1,17 @@
-from collections import OrderedDict
+import copy
 from itertools import product
 
 import numpy as np
 
 from sklearn.base import ClassifierMixin
 
-from HPOlibConfigSpace.forbidden import ForbiddenEqualsClause
-from HPOlibConfigSpace.forbidden import ForbiddenAndConjunction
+from HPOlibConfigSpace.configuration_space import ConfigurationSpace
+from HPOlibConfigSpace.forbidden import ForbiddenEqualsClause, ForbiddenAndConjunction
 
 from ParamSklearn import components as components
 from ParamSklearn.base import ParamSklearnBaseEstimator
-from ParamSklearn.util import SPARSE
-from ParamSklearn.components.preprocessing.balancing import Balancing
+from ParamSklearn.constants import SPARSE
+from ParamSklearn.components.data_preprocessing.balancing import Balancing
 import ParamSklearn.create_searchspace_util
 
 
@@ -61,21 +61,21 @@ class ParamSklearnClassifier(ClassifierMixin, ParamSklearnBaseEstimator):
 
     """
 
-    def fit(self, X, Y, fit_params=None, init_params=None):
-        self.num_targets = 1 if len(Y.shape) == 1 else Y.shape[1]
+    def pre_transform(self, X, y, fit_params=None, init_params=None):
+        self.num_targets = 1 if len(y.shape) == 1 else y.shape[1]
 
         # Weighting samples has to be done here, not in the components
         if self.configuration['balancing:strategy'] == 'weighting':
             balancing = Balancing(strategy='weighting')
             init_params, fit_params = balancing.get_weights(
-                Y, self.configuration['classifier'],
-                self.configuration['preprocessor'],
+                y, self.configuration['classifier:__choice__'],
+                self.configuration['preprocessor:__choice__'],
                 init_params, fit_params)
 
-        super(ParamSklearnClassifier, self).fit(X, Y, fit_params=fit_params,
-                                                init_params=init_params)
+        X, fit_params = super(ParamSklearnClassifier, self).pre_transform(
+            X, y, fit_params=fit_params, init_params=init_params)
 
-        return self
+        return X, fit_params
 
     def predict_proba(self, X, batch_size=None):
         """predict_proba.
@@ -94,12 +94,11 @@ class ParamSklearnClassifier(ClassifierMixin, ParamSklearnBaseEstimator):
         array, shape=(n_samples,) if n_classes == 2 else (n_samples, n_classes)
         """
         if batch_size is None:
-            self._validate_input_X(X)
             Xt = X
-            for name, transform in self._pipeline.steps[:-1]:
+            for name, transform in self.pipeline_.steps[:-1]:
                 Xt = transform.transform(Xt)
 
-            return self._pipeline.steps[-1][-1].predict_proba(Xt)
+            return self.pipeline_.steps[-1][-1].predict_proba(Xt)
 
         else:
             if type(batch_size) is not int or batch_size <= 0:
@@ -139,170 +138,68 @@ class ParamSklearnClassifier(ClassifierMixin, ParamSklearnBaseEstimator):
                 return y
 
     @classmethod
-    def get_available_components(cls, available_comp, data_prop, inc, exc):
-        components_dict = OrderedDict()
-        for name in available_comp:
-            if inc is not None and name not in inc:
-                continue
-            elif exc is not None and name in exc:
-                continue
-
-            entry = available_comp[name]
-            if entry.get_properties()['handles_classification'] is False:
-                continue
-            if data_prop.get('multiclass') is True and entry.get_properties()[
-                    'handles_multiclass'] is False:
-                continue
-            if data_prop.get('multilabel') is True and available_comp[name]. \
-                    get_properties()['handles_multilabel'] is False:
-                continue
-            components_dict[name] = entry
-
-        return components_dict
-
-    @classmethod
-    def get_hyperparameter_search_space(cls, include_estimators=None,
-                                        exclude_estimators=None,
-                                        include_preprocessors=None,
-                                        exclude_preprocessors=None,
+    def get_hyperparameter_search_space(cls, include=None, exclude=None,
                                         dataset_properties=None):
+        """Create the hyperparameter configuration space.
 
-        if include_estimators is not None and exclude_estimators is not None:
-            raise ValueError("The arguments include_estimators and "
-                             "exclude_estimators cannot be used together.")
+        Parameters
+        ----------
+        include : dict (optional, default=None)
 
-        if include_preprocessors is not None and exclude_preprocessors is not None:
-            raise ValueError("The arguments include_preprocessors and "
-                             "exclude_preprocessors cannot be used together.")
+        Returns
+        -------
+        """
+        cs = ConfigurationSpace()
 
         if dataset_properties is None or not isinstance(dataset_properties, dict):
             dataset_properties = dict()
+        if not 'target_type' in dataset_properties:
+            dataset_properties['target_type'] = 'classification'
+        if dataset_properties['target_type'] != 'classification':
+            dataset_properties['target_type'] = 'classification'
 
-        if 'sparse' not in dataset_properties:
-            # This dataset is probaby dense
-            dataset_properties['sparse'] = False
+        pipeline = cls._get_pipeline()
+        cs = cls._get_hyperparameter_search_space(cs, dataset_properties,
+                                                  exclude, include, pipeline)
 
-        # Compile a list of legal preprocessors for this problem
-        available_preprocessors = components.preprocessing_components._preprocessors
-        preprocessors = ParamSklearnClassifier.get_available_components(
-            available_comp=available_preprocessors,
-            data_prop=dataset_properties,
-            inc=include_preprocessors,
-            exc=exclude_preprocessors)
+        classifiers = cs.get_hyperparameter('classifier:__choice__').choices
+        preprocessors = cs.get_hyperparameter('preprocessor:__choice__').choices
+        available_classifiers = pipeline[-1][1].get_available_components(
+            dataset_properties)
+        available_preprocessors = pipeline[-2][1].get_available_components(
+            dataset_properties)
 
-        # Compile a list of all estimator objects for this problem
-        available_classifiers = ParamSklearnClassifier._get_estimator_components()
-        classifiers = ParamSklearnClassifier.get_available_components(
-            available_comp=available_classifiers,
-            data_prop=dataset_properties,
-            inc=include_estimators,
-            exc=exclude_estimators)
+        possible_default_classifier = copy.copy(list(
+            available_classifiers.keys()))
+        default = cs.get_hyperparameter('classifier:__choice__').default
+        del possible_default_classifier[possible_default_classifier.index(default)]
 
-        if len(classifiers) == 0:
-            raise ValueError("No classifiers found")
-        if len(preprocessors) == 0:
-            raise ValueError("No preprocessors found, please add NoPreprocessing")
-
-        preprocessors_list = preprocessors.keys()
-        classifiers_list = classifiers.keys()
-        matches = ParamSklearn.create_searchspace_util.get_match_array(
-            preprocessors=preprocessors, estimators=classifiers,
-            sparse=dataset_properties.get('sparse'), pipeline=cls._get_pipeline())
-
-        # Now we have only legal preprocessors/classifiers we combine them
-        # Simple sanity checks
-        assert np.sum(matches) != 0, "No valid preprocessor/classifier " \
-                                     "combination found, probably a bug"
-        assert np.sum(matches) <= (matches.shape[0] * matches.shape[1]), \
-            "'matches' is not binary; %s <= %d, [%d*%d]" % \
-            (str(np.sum(matches)), matches.shape[0]*matches.shape[1],
-             matches.shape[0], matches.shape[1])
-
-        if np.sum(matches) < (matches.shape[0] * matches.shape[1]):
-            matches, preprocessors_list, classifiers_list, preprocessors, classifiers = \
-                ParamSklearn.create_searchspace_util.sanitize_arrays(
-                    m=matches, preprocessors_list=preprocessors_list,
-                    estimators_list=classifiers_list,
-                    preprocessors=preprocessors, estimators=classifiers)
-
-        # Sanity checks
-        assert len(preprocessors_list) > 0, "No valid preprocessors found"
-        assert len(classifiers_list) > 0, "No valid classifiers found"
-
-        assert len(preprocessors_list) == matches.shape[0], \
-            "Preprocessor deleting went wrong"
-        assert len(classifiers_list) == matches.shape[1], \
-            "Classifier deleting went wrong"
-        assert [c in classifiers_list for c in classifiers]
-        assert [p in preprocessors_list for p in preprocessors]
-
-        # Select the default preprocessor before the always active
-        # preprocessors are added, so they will not be selected as default
-        # preprocessors
-        if "no_preprocessing" in preprocessors:
-            preprocessor_default = "no_preprocessing"
-        else:
-            preprocessor_default = sorted(preprocessors.keys())[0]
-
-        # Now add always present preprocessors
-        for name in available_preprocessors:
-            if name in cls._get_pipeline():
-                preprocessors[name] = available_preprocessors[name]
-
-        # Hardcode the defaults based on some educated guesses
-        classifier_defaults = ['random_forest', 'liblinear_svc', 'sgd',
-                               'libsvm_svc']
-        classifier_default = None
-        for cd_ in classifier_defaults:
-            # Make sure that a classifier which can only handle dense is not
-            # selected as the default for a sparse dataset
-            if cd_ not in classifiers:
-                continue
-            no_preprocessing_idx = preprocessors_list.index(preprocessor_default)
-            cd_index = classifiers_list.index(cd_)
-            if matches[no_preprocessing_idx, cd_index] == 1:
-                classifier_default = cd_
-                break
-        if classifier_default is None:
-            classifier_default = classifiers.keys()[0]
-
-        # Get the configuration space
-        configuration_space = super(ParamSklearnClassifier, cls).\
-            get_hyperparameter_search_space(estimator_name=cls._get_estimator_hyperparameter_name(),
-                                            default_estimator=classifier_default,
-                                            estimator_components=classifiers,
-                                            default_preprocessor=preprocessor_default,
-                                            preprocessor_components=preprocessors,
-                                            dataset_properties=dataset_properties,
-                                            always_active=cls._get_pipeline())
-
-        # And now add forbidden parameter configurations
-        # According to matches
-        configuration_space = ParamSklearn.create_searchspace_util.add_forbidden(
-            conf_space=configuration_space, preproc_list=preprocessors_list,
-            est_list=classifiers_list, matches=matches, est_type="classifier")
-
-        # A classifier which can handle sparse data after the densifier
+        # A classifier which can handle sparse data after the densifier is
+        # forbidden for memory issues
         for key in classifiers:
-            if SPARSE in classifiers[key].get_properties()['input']:
-                try:
-                    configuration_space.add_forbidden_clause(
-                        ForbiddenAndConjunction(
-                            ForbiddenEqualsClause(
-                                configuration_space.get_hyperparameter(
-                                    'classifier'), key),
-                            ForbiddenEqualsClause(
-                                configuration_space.get_hyperparameter(
-                                    'preprocessor'), 'densifier')
-                        ))
-                except ValueError as e:
-                    if e.message.startswith("Forbidden clause must be "
-                                            "instantiated with a legal "
-                                            "hyperparameter value for "
-                                            "'preprocessor"):
-                        pass
-                    else:
-                        raise e
+            if SPARSE in available_classifiers[key].get_properties()['input']:
+                if 'densifier' in preprocessors:
+                    while True:
+                        try:
+                            cs.add_forbidden_clause(
+                                ForbiddenAndConjunction(
+                                    ForbiddenEqualsClause(
+                                        cs.get_hyperparameter(
+                                            'classifier:__choice__'), key),
+                                    ForbiddenEqualsClause(
+                                        cs.get_hyperparameter(
+                                            'preprocessor:__choice__'), 'densifier')
+                                ))
+                            # Success
+                            break
+                        except ValueError:
+                            # Change the default and try again
+                            try:
+                                default = possible_default_classifier.pop()
+                            except IndexError:
+                                raise ValueError("Cannot find a legal default configuration.")
+                            cs.get_hyperparameter(
+                                'classifier:__choice__').default = default
 
         # which would take too long
         # Combinations of non-linear models with feature learning:
@@ -313,131 +210,87 @@ class ParamSklearnClassifier(ClassifierMixin, ParamSklearnBaseEstimator):
         feature_learning = ["kitchen_sinks", "nystroem_sampler"]
 
         for c, f in product(classifiers_, feature_learning):
-            if c not in classifiers_list:
+            if c not in classifiers:
                 continue
-            if f not in preprocessors_list:
+            if f not in preprocessors:
                 continue
-            try:
-                configuration_space.add_forbidden_clause(ForbiddenAndConjunction(
-                    ForbiddenEqualsClause(configuration_space.get_hyperparameter(
-                        "classifier"), c),
-                    ForbiddenEqualsClause(configuration_space.get_hyperparameter(
-                        "preprocessor"), f)))
-            except KeyError:
-                pass
-            except ValueError as e:
-                if "violates forbidden clause (Forbidden: classifier == %s " \
-                        "&& Forbidden: preprocessor == %s)" % (classifiers_,
-                                                               feature_learning):
-                    # TODO: super-hacky, build a method for that in the
-                    # configuration space module
-                    configuration_space._hyperparameters[
-                        'classifier'].default = classifier_defaults[1]
-
-        # We have seen empirically that tree-based models together with PCA
-        # don't work better than tree-based models without preprocessing
-        #classifiers_ = ["random_forest", "extra_trees", "gradient_boosting",
-        #                "decision_tree"]
-        #for c in classifiers_:
-        #    if c not in classifiers_list:
-        #        continue
-        #    try:
-        #        configuration_space.add_forbidden_clause(
-        #            ForbiddenAndConjunction(
-        #                ForbiddenEqualsClause(
-        #                    configuration_space.get_hyperparameter(
-        #                        "preprocessor"), "pca"),
-        #                ForbiddenEqualsClause(
-        #                    configuration_space.get_hyperparameter(
-        #                        "classifier"), c)))
-        #    except KeyError:
-        #        pass
-        #    except ValueError as e:
-        #        if e.message.startswith("Forbidden clause must be "
-        #                                "instantiated with a legal "
-        #                                "hyperparameter value for "
-        #                                "'preprocessor"):
-        #            pass
-        #        else:
-        #            raise e
+            while True:
+                try:
+                    cs.add_forbidden_clause(ForbiddenAndConjunction(
+                        ForbiddenEqualsClause(cs.get_hyperparameter(
+                            "classifier:__choice__"), c),
+                        ForbiddenEqualsClause(cs.get_hyperparameter(
+                            "preprocessor:__choice__"), f)))
+                    break
+                except KeyError:
+                    break
+                except ValueError as e:
+                    # Change the default and try again
+                    try:
+                        default = possible_default_classifier.pop()
+                    except IndexError:
+                        raise ValueError(
+                            "Cannot find a legal default configuration.")
+                    cs.get_hyperparameter(
+                        'classifier:__choice__').default = default
 
         # Won't work
-        # Multinomial NB etc does not work with negative values, don't use
-        # it with standardization, features learning, pca
-        classifiers_ = ["multinomial_nb", "bernoulli_nb"]
+        # Multinomial NB etc don't use with features learning, pca etc
+        classifiers_ = ["multinomial_nb"]
         preproc_with_negative_X = ["kitchen_sinks", "pca", "truncatedSVD",
                                    "fast_ica", "kernel_pca", "nystroem_sampler"]
-        scaling_strategies = ['standard', 'none', "normalize"]
-        for c in classifiers_:
-            if c not in classifiers_list:
-                continue
-            for scaling_strategy in scaling_strategies:
-                try:
-                    configuration_space.add_forbidden_clause(ForbiddenAndConjunction(
-                        ForbiddenEqualsClause(configuration_space.get_hyperparameter(
-                            "rescaling:strategy"), scaling_strategy),
-                        ForbiddenEqualsClause(configuration_space.get_hyperparameter(
-                            "classifier"), c)))
-                except KeyError:
-                    pass
 
         for c, f in product(classifiers_, preproc_with_negative_X):
-            if c not in classifiers_list:
+            if c not in classifiers:
                 continue
-            if f not in preprocessors_list:
+            if f not in preprocessors:
                 continue
-            try:
-                configuration_space.add_forbidden_clause(ForbiddenAndConjunction(
-                    ForbiddenEqualsClause(configuration_space.get_hyperparameter(
-                        "preprocessor"), f),
-                    ForbiddenEqualsClause(configuration_space.get_hyperparameter(
-                        "classifier"), c)))
-            except KeyError:
-                pass
+            while True:
+                try:
+                    cs.add_forbidden_clause(ForbiddenAndConjunction(
+                        ForbiddenEqualsClause(cs.get_hyperparameter(
+                            "preprocessor:__choice__"), f),
+                        ForbiddenEqualsClause(cs.get_hyperparameter(
+                            "classifier:__choice__"), c)))
+                    break
+                except KeyError:
+                    break
+                except ValueError:
+                    # Change the default and try again
+                    try:
+                        default = possible_default_classifier.pop()
+                    except IndexError:
+                        raise ValueError(
+                            "Cannot find a legal default configuration.")
+                    cs.get_hyperparameter(
+                        'classifier:__choice__').default = default
 
-        # Now try to add things for which we know that they don't work
-        forbidden_hyperparameter_combinations = \
-            [("select_percentile_classification:score_func", "chi2",
-              "rescaling:strategy", "standard"),
-             ("select_percentile_classification:score_func", "chi2",
-              "rescaling:strategy", "normalize"),
-             ("select_percentile_classification:score_func", "chi2",
-              "rescaling:strategy", "none"),
-             ("select_rates:score_func", "chi2",
-              "rescaling:strategy", "standard"),
-             ("select_rates:score_func", "chi2",
-              "rescaling:strategy", "none"),
-             ("select_rates:score_func", "chi2",
-              "rescaling:strategy", "normalize"),
-             ("nystroem_sampler:kernel", 'chi2', "rescaling:strategy",
-              "standard"),
-             ("nystroem_sampler:kernel", 'chi2', "rescaling:strategy",
-              "normalize"),
-             ("nystroem_sampler:kernel", 'chi2', "rescaling:strategy",
-              "none")]
-        for hp_name_1, hp_value_1, hp_name_2, hp_value_2 in \
-                forbidden_hyperparameter_combinations:
-            try:
-                configuration_space.add_forbidden_clause(ForbiddenAndConjunction(
-                    ForbiddenEqualsClause(configuration_space.get_hyperparameter(
-                        hp_name_1), hp_value_1),
-                    ForbiddenEqualsClause(configuration_space.get_hyperparameter(
-                        hp_name_2), hp_value_2)
-                ))
-            except:
-                pass
+        return cs
 
-        return configuration_space
+    @classmethod
+    def _get_pipeline(cls):
+        steps = []
 
-    @staticmethod
-    def _get_estimator_hyperparameter_name():
+        # Add the always active preprocessing components
+        steps.extend(
+            [["one_hot_encoding",
+              components.data_preprocessing._preprocessors['one_hot_encoding']],
+             ["imputation",
+              components.data_preprocessing._preprocessors['imputation']],
+             ["rescaling",
+              components.data_preprocessing._preprocessors['rescaling']],
+             ["balancing",
+              components.data_preprocessing._preprocessors['balancing']]])
+
+        # Add the preprocessing component
+        steps.append(['preprocessor',
+                      components.feature_preprocessing._preprocessors['preprocessor']])
+
+        # Add the classification component
+        steps.append(['classifier',
+                      components.classification_components._classifiers['classifier']])
+        return steps
+
+    def _get_estimator_hyperparameter_name(self):
         return "classifier"
 
-    @staticmethod
-    def _get_estimator_components():
-        return components.classification_components._classifiers
-
-    @staticmethod
-    def _get_pipeline():
-        return ["imputation", "rescaling", "balancing", "__preprocessor__",
-                "__estimator__"]

@@ -1,40 +1,33 @@
 import sklearn.neighbors
+import sklearn.multiclass
 
 from HPOlibConfigSpace.configuration_space import ConfigurationSpace
 from HPOlibConfigSpace.hyperparameters import CategoricalHyperparameter, \
-    Constant, UnParametrizedHyperparameter, UniformIntegerHyperparameter
-from HPOlibConfigSpace.conditions import EqualsCondition
+    Constant, UniformIntegerHyperparameter
 
-from ParamSklearn.components.classification_base import ParamSklearnClassificationAlgorithm
-from ParamSklearn.util import DENSE, SPARSE, PREDICTIONS
+from ParamSklearn.components.base import ParamSklearnClassificationAlgorithm
+from ParamSklearn.constants import *
 
 
 class KNearestNeighborsClassifier(ParamSklearnClassificationAlgorithm):
 
-    def __init__(self, n_neighbors, weights, algorithm='auto', p=2,
-                 leaf_size=30, random_state=None):
-
-        self.n_neighbors = int(n_neighbors)
-        if weights not in ("uniform", "distance"):
-            raise ValueError("'weights' should be in ('uniform', 'distance'): "
-                             "%s" % weights)
+    def __init__(self, n_neighbors, weights, p, random_state=None):
+        self.n_neighbors = n_neighbors
         self.weights = weights
-        #if metric not in ("euclidean", "manhattan", "chebyshev", "minkowski"):
-        #    raise ValueError("'metric' should be in ('euclidean',
-        # 'chebyshev', "
-        #                     "'manhattan', 'minkowski'): %s" % metric)
-        #self.metric = metric
-        self.algorithm = algorithm
-        self.p = int(p)
-        self.leaf_size = int(leaf_size)
+        self.p = p
         self.random_state = random_state
 
     def fit(self, X, Y):
-        self.estimator = \
-            sklearn.neighbors.KNeighborsClassifier(
-                n_neighbors=self.n_neighbors, weights=self.weights,
-                p=self.p, algorithm=self.algorithm,
-                leaf_size=self.leaf_size)
+        estimator = \
+            sklearn.neighbors.KNeighborsClassifier(n_neighbors=self.n_neighbors,
+                                                   weights=self.weights,
+                                                   p=self.p)
+
+        if len(Y.shape) == 2 and Y.shape[1] > 1:
+            self.estimator = sklearn.multiclass.OneVsRestClassifier(estimator, n_jobs=1)
+        else:
+            self.estimator = estimator
+
         self.estimator.fit(X, Y)
         return self
 
@@ -49,7 +42,7 @@ class KNearestNeighborsClassifier(ParamSklearnClassificationAlgorithm):
         return self.estimator.predict_proba(X)
 
     @staticmethod
-    def get_properties():
+    def get_properties(dataset_properties=None):
         return {'shortname': 'KNN',
                 'name': 'K-Nearest Neighbor Classification',
                 'handles_missing_values': False,
@@ -61,35 +54,23 @@ class KNearestNeighborsClassifier(ParamSklearnClassificationAlgorithm):
                 'handles_regression': False,
                 'handles_classification': True,
                 'handles_multiclass': True,
-                'handles_multilabel': False,
+                'handles_multilabel': True,
                 'is_deterministic': True,
                 'handles_sparse': True,
-                'input': (DENSE, SPARSE),
-                'output': PREDICTIONS,
+                'input': (DENSE, SPARSE, UNSIGNED_DATA),
+                'output': (PREDICTIONS,),
                 # TODO find out what is best used here!
                 'preferred_dtype' : None}
 
     @staticmethod
     def get_hyperparameter_search_space(dataset_properties=None):
-        n_neighbors = UniformIntegerHyperparameter(
-            name="n_neighbors", lower=1, upper=100, default=1)
-        weights = CategoricalHyperparameter(
-            name="weights", choices=["uniform", "distance"], default="uniform")
-        algorithm = Constant(name='algorithm', value="auto")
-        p = CategoricalHyperparameter(
-            name="p", choices=[1, 2], default=2)
-        leaf_size = Constant(name="leaf_size", value=30)
-
         cs = ConfigurationSpace()
-        cs.add_hyperparameter(n_neighbors)
-        cs.add_hyperparameter(weights)
-        #cs.add_hyperparameter(metric)
-        cs.add_hyperparameter(algorithm)
-        cs.add_hyperparameter(p)
-        cs.add_hyperparameter(leaf_size)
 
-        # Conditions
-        #metric_p = EqualsCondition(parent=metric, child=p, value="minkowski")
-        #cs.add_condition(metric_p)
+        n_neighbors = cs.add_hyperparameter(UniformIntegerHyperparameter(
+            name="n_neighbors", lower=1, upper=100, default=1))
+        weights = cs.add_hyperparameter(CategoricalHyperparameter(
+            name="weights", choices=["uniform", "distance"], default="uniform"))
+        p = cs.add_hyperparameter(CategoricalHyperparameter(
+            name="p", choices=[1, 2], default=2))
 
         return cs

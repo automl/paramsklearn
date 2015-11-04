@@ -5,8 +5,8 @@ from HPOlibConfigSpace.hyperparameters import UniformFloatHyperparameter, \
     UniformIntegerHyperparameter, CategoricalHyperparameter, \
     UnParametrizedHyperparameter, Constant
 
-from ParamSklearn.components.classification_base import ParamSklearnClassificationAlgorithm
-from ParamSklearn.util import DENSE, PREDICTIONS
+from ParamSklearn.components.base import ParamSklearnClassificationAlgorithm
+from ParamSklearn.constants import *
 from ParamSklearn.implementations import ProjLogit
 
 
@@ -16,7 +16,6 @@ class ProjLogitCLassifier(ParamSklearnClassificationAlgorithm):
     def __init__(self, max_epochs = 2, random_state=None, n_jobs=1):
         self.max_epochs = max_epochs
         self.estimator = None
-
 
     def fit(self, X, Y):
         self.estimator = ProjLogit.ProjLogit(max_epochs = int(self.max_epochs))
@@ -34,7 +33,7 @@ class ProjLogitCLassifier(ParamSklearnClassificationAlgorithm):
         return self.estimator.predict_proba(X)
 
     @staticmethod
-    def get_properties():
+    def get_properties(dataset_properties=None):
         return {'shortname': 'PLogit',
                 'name': 'Logistic Regresion using Least Squares',
                 'handles_missing_values': False,
@@ -48,8 +47,8 @@ class ProjLogitCLassifier(ParamSklearnClassificationAlgorithm):
                 'handles_multilabel': False,
                 'is_deterministic': True,
                 'handles_sparse': False,
-                'input': (DENSE, ),
-                'output': PREDICTIONS,
+                'input': (DENSE, UNSIGNED_DATA),
+                'output': (PREDICTIONS,),
                 'preferred_dtype': np.float32}
         
 

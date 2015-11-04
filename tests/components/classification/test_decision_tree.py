@@ -15,9 +15,16 @@ class DecisionTreetComponentTest(unittest.TestCase):
                                    sklearn.metrics.accuracy_score(predictions,
                                                                   targets))
 
+    def test_default_configuration_sparse(self):
+        for i in range(10):
+            predictions, targets = _test_classifier(DecisionTree, sparse=True)
+            self.assertAlmostEqual(0.69999999999999996,
+                                   sklearn.metrics.accuracy_score(predictions,
+                                                              targets))
+
     def test_default_configuration_predict_proba(self):
         for i in range(10):
             predictions, targets = _test_classifier_predict_proba(
                 DecisionTree, dataset='iris')
-            self.assertAlmostEqual(2.7631021115928571,
+            self.assertAlmostEqual(0.28069887755912964,
                 sklearn.metrics.log_loss(targets, predictions))

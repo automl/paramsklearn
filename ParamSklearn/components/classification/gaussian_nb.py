@@ -3,8 +3,8 @@ import sklearn.naive_bayes
 
 from HPOlibConfigSpace.configuration_space import ConfigurationSpace
 
-from ParamSklearn.components.classification_base import ParamSklearnClassificationAlgorithm
-from ParamSklearn.util import DENSE, PREDICTIONS
+from ParamSklearn.components.base import ParamSklearnClassificationAlgorithm
+from ParamSklearn.constants import *
 
 
 class GaussianNB(ParamSklearnClassificationAlgorithm):
@@ -15,11 +15,41 @@ class GaussianNB(ParamSklearnClassificationAlgorithm):
         self.verbose = int(verbose)
         self.estimator = None
 
-    def fit(self, X, Y):
-        num_features = X.shape[1]
-        self.estimator = sklearn.naive_bayes.GaussianNB()
-        self.estimator.fit(X, Y)
+    def fit(self, X, y):
+        while not self.configuration_fully_fitted():
+            self.iterative_fit(X, y, n_iter=1)
         return self
+
+    def iterative_fit(self, X, y, n_iter=1, refit=False):
+        if refit:
+            self.estimator = None
+
+        if self.estimator is None:
+            self.n_iter = 0
+            self.fully_fit_ = False
+            self.estimator = sklearn.naive_bayes.GaussianNB()
+            self.classes_ = np.unique(y.astype(int))
+
+        for iter in range(n_iter):
+            start = min(self.n_iter * 1000, y.shape[0])
+            stop = min((self.n_iter + 1) * 1000, y.shape[0])
+            self.estimator.partial_fit(X[start:stop], y[start:stop],
+                                       self.classes_)
+            self.n_iter += 1
+
+            if stop >= len(y):
+                self.fully_fit_ = True
+                break
+
+        return self
+
+    def configuration_fully_fitted(self):
+        if self.estimator is None:
+            return False
+        elif not hasattr(self, 'fully_fit_'):
+            return False
+        else:
+            return self.fully_fit_
 
     def predict(self, X):
         if self.estimator is None:
@@ -32,7 +62,7 @@ class GaussianNB(ParamSklearnClassificationAlgorithm):
         return self.estimator.predict_proba(X)
 
     @staticmethod
-    def get_properties():
+    def get_properties(dataset_properties=None):
         return {'shortname': 'GaussianNB',
                 'name': 'Gaussian Naive Bayes classifier',
                 'handles_missing_values': False,
@@ -46,8 +76,8 @@ class GaussianNB(ParamSklearnClassificationAlgorithm):
                 'handles_multilabel': False,
                 'is_deterministic': True,
                 'handles_sparse': False,
-                'input': (DENSE, ),
-                'output': PREDICTIONS,
+                'input': (DENSE, UNSIGNED_DATA),
+                'output': (PREDICTIONS,),
                 'preferred_dtype': np.float32}
 
     @staticmethod
